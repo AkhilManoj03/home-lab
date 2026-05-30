@@ -3,7 +3,7 @@
 
 <#
 .SYNOPSIS
-    Stage 0 — Preflight checks for the Windows homelab bootstrap.
+    Stage 0 - Preflight checks for the Windows homelab bootstrap.
 
 .DESCRIPTION
     Validates all prerequisites before any system changes are made:
@@ -56,13 +56,13 @@ $osBuild = [System.Environment]::OSVersion.Version.Build
 if ($osBuild -lt 19041) {
     Exit-Fatal "Unsupported Windows version. Minimum: Windows 10 build 19041 (20H1). Current build: $osBuild"
 }
-Write-Info "Windows build $osBuild — OK"
+Write-Info "Windows build $osBuild - OK"
 
 # ─── Internet connectivity ────────────────────────────────────────────────────
 
 try {
     $null = Invoke-WebRequest -Uri 'https://pkgs.tailscale.com' -Method Head -TimeoutSec 10 -UseBasicParsing
-    Write-Info 'Internet connectivity — OK'
+    Write-Info 'Internet connectivity - OK'
 } catch {
     Exit-Fatal 'No internet connectivity. Ensure the network is available before running this script.'
 }
@@ -78,6 +78,6 @@ foreach ($keyPath in @($DevopsPublicKeyPath, $AnsiblePublicKeyPath)) {
         Exit-Fatal "File does not appear to be a valid SSH public key: $keyPath"
     }
 }
-Write-Info 'SSH key files validated — OK'
+Write-Info 'SSH key files validated - OK'
 
 Write-Info 'Preflight complete.'

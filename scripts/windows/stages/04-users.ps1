@@ -3,18 +3,18 @@
 
 <#
 .SYNOPSIS
-    Stage 4 — Local user management for the Windows homelab bootstrap.
+    Stage 4 - Local user management for the Windows homelab bootstrap.
 
 .DESCRIPTION
     Creates the devops and ansible local Windows users and configures their
     SSH authorized keys with correct permissions.
 
-    devops  — member of Administrators; SSH lands in PowerShell.
+    devops  - member of Administrators; SSH lands in PowerShell.
               Authorized keys go in $env:ProgramData\ssh\administrators_authorized_keys
               (Windows OpenSSH silently ignores ~\.ssh\authorized_keys for
-              admin-group members — this is standard Windows OpenSSH behavior).
+              admin-group members - this is standard Windows OpenSSH behavior).
 
-    ansible — limited Windows user; SSH is forwarded into WSL via ForceCommand
+    ansible - limited Windows user; SSH is forwarded into WSL via ForceCommand
               (configured in Stage 3). Authorized keys go in the standard
               C:\Users\ansible\.ssh\authorized_keys path.
 
@@ -113,12 +113,12 @@ function New-BootstrapUser {
             -Name                     $Username `
             -Password                 $securePassword `
             -Description              $Description `
-            -PasswordNeverExpires     $true `
-            -UserMayNotChangePassword $true | Out-Null
+            -PasswordNeverExpires `
+            -UserMayNotChangePassword | Out-Null
 
         Write-Info "Created local user '$Username'."
     } else {
-        Write-Info "Local user '$Username' already exists — skipping creation."
+        Write-Info "Local user '$Username' already exists - skipping creation."
     }
 
     if ($IsAdmin) {
@@ -127,17 +127,17 @@ function New-BootstrapUser {
             Add-LocalGroupMember -Group 'Administrators' -Member $Username
             Write-Info "Added '$Username' to Administrators group."
         } else {
-            Write-Info "'$Username' already in Administrators group — skipping."
+            Write-Info "'$Username' already in Administrators group - skipping."
         }
     }
 }
 
 # ─── Create users ─────────────────────────────────────────────────────────────
 
-# devops — Windows admin; SSH lands in PowerShell (default, no override needed)
+# devops - Windows admin; SSH lands in PowerShell (default, no override needed)
 New-BootstrapUser -Username 'devops'  -Description 'Homelab administrator'   -IsAdmin $true
 
-# ansible — limited Windows user; SSH forwarded into WSL via ForceCommand (Stage 3)
+# ansible - limited Windows user; SSH forwarded into WSL via ForceCommand (Stage 3)
 New-BootstrapUser -Username 'ansible' -Description 'Ansible automation user' -IsAdmin $false
 
 # ─── devops authorized_keys ───────────────────────────────────────────────────
@@ -162,10 +162,13 @@ if (Test-Path $adminAuthorizedKeysPath) {
     $devopsKeyPresent = (Get-Content $adminAuthorizedKeysPath -Raw) -match [regex]::Escape($DevopsPublicKey)
 }
 if (-not $devopsKeyPresent) {
-    Add-Content -Path $adminAuthorizedKeysPath -Value $DevopsPublicKey -Encoding UTF8
+    # Append without BOM. PowerShell 5.1's Add-Content -Encoding UTF8 adds a BOM
+    # when creating a new file, which causes Win32-OpenSSH to reject the key.
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::AppendAllText($adminAuthorizedKeysPath, "$DevopsPublicKey`n", $utf8NoBom)
     Write-Info 'devops public key written to administrators_authorized_keys.'
 } else {
-    Write-Info 'devops public key already in administrators_authorized_keys — skipping.'
+    Write-Info 'devops public key already in administrators_authorized_keys - skipping.'
 }
 
 # Enforce strict ACL: SYSTEM + Administrators only (no Users, no Everyone)
@@ -188,27 +191,58 @@ $ansibleSshDir   = "$ansibleHome\.ssh"
 $ansibleAuthKeys = "$ansibleSshDir\authorized_keys"
 
 # Ensure profile directory exists (not auto-created until first interactive login)
-if (-not (Test-Path $ansibleHome)) {
+if (-not ([System.IO.Directory]::Exists($ansibleHome))) {
     New-Item -ItemType Directory -Path $ansibleHome -Force | Out-Null
 }
-if (-not (Test-Path $ansibleSshDir)) {
+
+# Register the user profile in the Windows ProfileList registry so Win32-OpenSSH
+# and other components can resolve the ansible home directory. Stage 5 runs
+# Start-Process -Credential ansible which can overwrite ProfileImagePath with a
+# temporary profile path (C:\Users\TEMP); stage 5 repairs this again in finally.
+Repair-AnsibleProfileList -Username 'ansible' -ProfilePath $ansibleHome | Out-Null
+Initialize-AnsibleUserProfile -Username 'ansible' -ProfilePath $ansibleHome | Out-Null
+$profileListKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$((Get-LocalUser -Name 'ansible').SID.Value)"
+
+# Windows auto-initializes the profile directory on the user's first SSH connection,
+# replacing the inherited ACL with a tighter per-user profile ACL. Administrators
+# end up with Read but not Write/Create-Subdirectory access, so New-Item for .ssh
+# would fail even though the home dir exists. Repair the home directory first so
+# Administrators have Full Control before we attempt to create or repair .ssh.
+#
+# Enable-AdminPathMaintenance detects the home dir via its own parent (C:\Users),
+# which is always accessible, then takes ownership recursively. This also covers
+# any previously locked .ssh or authorized_keys in a single pass, so the
+# individual calls below become redundant but are kept for defence-in-depth.
+Enable-AdminPathMaintenance -Path $ansibleHome
+Enable-AdminPathMaintenance -Path $ansibleSshDir
+Enable-AdminPathMaintenance -Path $ansibleAuthKeys
+
+if (-not ([System.IO.Directory]::Exists($ansibleSshDir))) {
     New-Item -ItemType Directory -Path $ansibleSshDir -Force | Out-Null
 }
 
 $ansibleKeyPresent = $false
-if (Test-Path $ansibleAuthKeys) {
-    $ansibleKeyPresent = (Get-Content $ansibleAuthKeys -Raw) -match [regex]::Escape($AnsiblePublicKey)
+if ([System.IO.File]::Exists($ansibleAuthKeys)) {
+    $ansibleKeyPresent = (Get-Content -LiteralPath $ansibleAuthKeys -Raw) -match [regex]::Escape($AnsiblePublicKey)
 }
 if (-not $ansibleKeyPresent) {
-    Add-Content -Path $ansibleAuthKeys -Value $AnsiblePublicKey -Encoding UTF8
+    # Append without BOM. PowerShell 5.1's Add-Content -Encoding UTF8 adds a BOM
+    # when creating a new file, which causes Win32-OpenSSH to reject the key.
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::AppendAllText($ansibleAuthKeys, "$AnsiblePublicKey`n", $utf8NoBom)
     Write-Info 'ansible public key written to authorized_keys.'
+    $ansibleKeyPresent = $true
 } else {
-    Write-Info 'ansible public key already in authorized_keys — skipping.'
+    Write-Info 'ansible public key already in authorized_keys - skipping.'
 }
 
+$script:AnsibleAuthKeysReady = $ansibleKeyPresent
+
 $ansibleSid = (Get-LocalUser -Name 'ansible').SID
-Set-RestrictedAcl -Path $ansibleSshDir   -UserSid $ansibleSid -UserAccess 'FullControl'
+# Lock the file before the directory: once .ssh is restricted, Administrators
+# cannot traverse it to read or change authorized_keys inside.
 Set-RestrictedAcl -Path $ansibleAuthKeys -UserSid $ansibleSid -UserAccess 'Read'
+Set-RestrictedAcl -Path $ansibleSshDir   -UserSid $ansibleSid -UserAccess 'FullControl'
 Write-Info 'ansible .ssh directory and authorized_keys permissions set.'
 
 # ─── Validation ───────────────────────────────────────────────────────────────
@@ -227,8 +261,17 @@ Assert-Check "'ansible' local user exists" `
 Assert-Check 'administrators_authorized_keys present' `
     (Test-Path $adminAuthorizedKeysPath)
 
-Assert-Check 'ansible authorized_keys present' `
-    (Test-Path $ansibleAuthKeys)
+Assert-Check 'ansible authorized_keys present and contains expected key' `
+    $script:AnsibleAuthKeysReady
+
+$profileListValid = $false
+if (Test-Path $profileListKey) {
+    $plProps = Get-ItemProperty -Path $profileListKey -ErrorAction SilentlyContinue
+    $profileListValid = [bool]$plProps.ProfileImagePath -and ($plProps.ProfileImagePath -eq $ansibleHome)
+}
+Assert-Check "'ansible' ProfileList ProfileImagePath = $ansibleHome" `
+    $profileListValid `
+    'Win32-OpenSSH needs ProfileImagePath to resolve authorized_keys for non-admin users'
 
 # Verify administrators_authorized_keys ACL has no non-SYSTEM/Administrators entries
 if (Test-Path $adminAuthorizedKeysPath) {
@@ -238,11 +281,11 @@ if (Test-Path $adminAuthorizedKeysPath) {
     }
     Assert-Check 'administrators_authorized_keys ACL restricted to SYSTEM + Administrators' `
         ($null -eq $unexpectedRules -or @($unexpectedRules).Count -eq 0) `
-        'Unexpected ACL entries found — check file permissions manually'
+        'Unexpected ACL entries found - check file permissions manually'
 }
 
 if (-not $script:StageAllPassed) {
-    Write-Warn 'Stage 4 completed with warnings — review FAIL items above.'
+    Write-Warn 'Stage 4 completed with warnings - review FAIL items above.'
 } else {
     Write-Info 'Stage 4 complete.'
 }
