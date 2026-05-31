@@ -3,7 +3,7 @@
 
 <#
 .SYNOPSIS
-    Orchestrator — bootstrap a fresh Windows machine as a remotely manageable homelab node.
+    Orchestrator - bootstrap a fresh Windows machine as a remotely manageable homelab node.
 
 .DESCRIPTION
     Prepares a Windows machine for remote management via Tailscale and Ansible.
@@ -12,9 +12,9 @@
     configuration.
 
     Architectural layers:
-      Windows  — Tailscale, OpenSSH, WSL2 runtime, remote entrypoint
-      WSL      — Linux server environment, Ansible target
-      Docker   — runs only inside WSL (NOT configured here)
+      Windows  - Tailscale, OpenSSH, WSL2 runtime, remote entrypoint
+      WSL      - Linux server environment, Ansible target
+      Docker   - runs only inside WSL (NOT configured here)
 
     Run as Administrator on the target Windows machine.
 
@@ -32,7 +32,7 @@
 
 .PARAMETER Hostname
     Optional. Rename the machine to this hostname. A reboot is required
-    after rename — the script will exit cleanly after initiating it.
+    after rename - the script will exit cleanly after initiating it.
 
 .PARAMETER DevopsPublicKeyPath
     REQUIRED. Path to the devops user's public SSH key file.
@@ -95,9 +95,9 @@ $ErrorActionPreference = 'Stop'
 
 . "$PSScriptRoot\common.ps1"
 
-Write-Info '════════════════════════════════════════════════════════'
+Write-Info '========================================================'
 Write-Info ' Windows Homelab Bootstrap'
-Write-Info '════════════════════════════════════════════════════════'
+Write-Info '========================================================'
 
 # ─── Stage 0: Preflight ───────────────────────────────────────────────────────
 
@@ -142,13 +142,13 @@ $AnsiblePublicKey = (Get-Content $AnsiblePublicKeyPath -Raw).Trim()
 # ─── Done ─────────────────────────────────────────────────────────────────────
 
 Write-Host ''
-Write-Info '════════════════════════════════════════════════════════'
+Write-Info '========================================================'
 Write-Info ' Bootstrap complete. All stages passed.'
-Write-Info '════════════════════════════════════════════════════════'
+Write-Info '========================================================'
 Write-Info ''
-Write-Info 'Next steps — from your MacBook on the same tailnet:'
-Write-Info "  ssh devops@$env:COMPUTERNAME   → Windows PowerShell"
-Write-Info "  ssh ansible@$env:COMPUTERNAME  → WSL Ubuntu shell"
+Write-Info 'Next steps - from your MacBook on the same tailnet:'
+Write-Info "  ssh devops@$env:COMPUTERNAME   -> Windows PowerShell"
+Write-Info "  ssh ansible@$env:COMPUTERNAME  -> WSL Ubuntu shell"
 Write-Info ''
 Write-Info 'Ansible inventory entry for this node:'
 Write-Info "  $env:COMPUTERNAME ansible_user=ansible ansible_shell_type=sh ansible_shell_executable=/bin/bash"

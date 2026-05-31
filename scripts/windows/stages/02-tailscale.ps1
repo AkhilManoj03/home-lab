@@ -3,7 +3,7 @@
 
 <#
 .SYNOPSIS
-    Stage 2 — Tailscale installation and authentication.
+    Stage 2 - Tailscale installation and authentication.
 
 .DESCRIPTION
     Installs Tailscale, ensures the service is running, and authenticates
@@ -39,14 +39,28 @@ Write-Info '=== Stage 2: Tailscale ==='
 
 $script:StageAllPassed = $true
 
+function Find-TailscaleBinary {
+    $candidates = @(
+        "$env:ProgramFiles\Tailscale\tailscale.exe",
+        "${env:ProgramFiles(x86)}\Tailscale\tailscale.exe",
+        "$env:LOCALAPPDATA\Programs\Tailscale\tailscale.exe"
+    )
+    foreach ($path in $candidates) {
+        if (Test-Path $path) { return $path }
+    }
+    $inPath = Get-Command tailscale.exe -ErrorAction SilentlyContinue
+    if ($inPath) { return $inPath.Source }
+    return $null
+}
+
 # ─── Installation ─────────────────────────────────────────────────────────────
 
 $tailscalePath = Find-TailscaleBinary
 
 if (-not $tailscalePath) {
-    Write-Info 'Tailscale not found — downloading and installing...'
+    Write-Info 'Tailscale not found - downloading and installing...'
     $installerPath = Join-Path $env:TEMP 'tailscale-setup.exe'
-    Invoke-WebRequest -Uri 'https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.exe' `
+    Invoke-WebRequest -Uri 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe' `
         -OutFile $installerPath -UseBasicParsing
     Start-Process -FilePath $installerPath -ArgumentList '/S' -Wait
     Remove-Item $installerPath -ErrorAction SilentlyContinue
@@ -75,14 +89,14 @@ if ($tailscaleSvc) {
         Write-Info 'Tailscale service already running.'
     }
 } else {
-    Write-Warn 'Tailscale service not found via Get-Service — proceeding anyway.'
+    Write-Warn 'Tailscale service not found via Get-Service - proceeding anyway.'
 }
 
 # ─── Authentication ───────────────────────────────────────────────────────────
 
 $tsStatus = & $tailscalePath status --json 2>&1 | Out-String | ConvertFrom-Json -ErrorAction SilentlyContinue
 if ($tsStatus -and $tsStatus.BackendState -eq 'Running') {
-    Write-Info 'Tailscale already connected to tailnet — skipping auth.'
+    Write-Info 'Tailscale already connected to tailnet - skipping auth.'
 } else {
     Write-Info 'Authenticating with Tailscale...'
     & $tailscalePath up --authkey=$TailscaleAuthKey --accept-dns=false --reset
@@ -110,7 +124,7 @@ Assert-Check 'Tailscale connected to tailnet' `
     'Check tailscale status and verify auth key'
 
 if (-not $script:StageAllPassed) {
-    Write-Warn 'Stage 2 completed with warnings — review FAIL items above.'
+    Write-Warn 'Stage 2 completed with warnings - review FAIL items above.'
 } else {
     Write-Info 'Stage 2 complete.'
 }

@@ -3,7 +3,7 @@
 
 <#
 .SYNOPSIS
-    Stage 3 — OpenSSH Server installation, hardening, and user experience.
+    Stage 3 - OpenSSH Server installation, hardening, and user experience.
 
 .DESCRIPTION
     Handles all sshd_config and sshd service concerns in one place:
@@ -59,21 +59,7 @@ if ($sshdCapability.State -ne 'Installed') {
     Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' | Out-Null
     Write-Info 'OpenSSH Server installed.'
 } else {
-    Write-Info 'OpenSSH Server already installed — skipping.'
-}
-
-# ─── sshd service ─────────────────────────────────────────────────────────────
-
-$sshdSvc = Get-Service -Name 'sshd'
-if ($sshdSvc.StartType -ne 'Automatic') {
-    Set-Service -Name 'sshd' -StartupType Automatic
-    Write-Info 'sshd set to automatic startup.'
-}
-if ($sshdSvc.Status -ne 'Running') {
-    Start-Service -Name 'sshd'
-    Write-Info 'sshd started.'
-} else {
-    Write-Info 'sshd already running — OK'
+    Write-Info 'OpenSSH Server already installed - skipping.'
 }
 
 # ─── Firewall rule ────────────────────────────────────────────────────────────
@@ -93,64 +79,71 @@ if (-not $fwRuleExists) {
         -Action      Allow | Out-Null
     Write-Info 'Firewall rule for SSH (TCP/22) created.'
 } else {
-    Write-Info 'SSH firewall rule already exists — skipping.'
+    Write-Info 'SSH firewall rule already exists - skipping.'
 }
 
 # ─── sshd_config hardening ────────────────────────────────────────────────────
 
 Write-Info '--- SSH authentication hardening ---'
 
-$configBefore = Get-Content $sshdConfigPath -Raw
-
-# These global directives must appear BEFORE any Match block.
-# Set-SshdConfigGlobalOption inserts before the first Match block if not present.
-Set-SshdConfigGlobalOption -ConfigPath $sshdConfigPath -Key 'PasswordAuthentication' -Value 'no'
-Set-SshdConfigGlobalOption -ConfigPath $sshdConfigPath -Key 'PubkeyAuthentication'   -Value 'yes'
-
-if ((Get-Content $sshdConfigPath -Raw) -ne $configBefore) {
+# Repair misplaced globals (e.g. StrictModes after Match Group administrators)
+# before editing or starting sshd.
+if (Repair-SshdConfigMatchLayout -ConfigPath $sshdConfigPath) {
     $configChanged = $true
 }
 
-# ─── Match User ansible — ForceCommand into WSL ───────────────────────────────
+# Global directives must appear before any Match block.
+if (Set-SshdConfigGlobalOption -ConfigPath $sshdConfigPath -Key 'PasswordAuthentication' -Value 'no') {
+    $configChanged = $true
+}
+if (Set-SshdConfigGlobalOption -ConfigPath $sshdConfigPath -Key 'PubkeyAuthentication' -Value 'yes') {
+    $configChanged = $true
+}
 
 Write-Info '--- SSH user experience (ansible ForceCommand) ---'
 
-$currentConfig = Get-Content $sshdConfigPath -Raw
-
-if ($currentConfig -notmatch 'Match User ansible') {
-    $matchBlock = @"
-
-
-# ─── Ansible inventory note ───────────────────────────────────────────────────
-# Required inventory settings for this host (shell is WSL, not Windows):
-#   [homelab]
-#   <hostname> ansible_user=ansible ansible_shell_type=sh ansible_shell_executable=/bin/bash
-#
-# NOTE: ForceCommand breaks sftp subsystem access for the ansible user.
-# Configure Ansible to use scp or enable pipelining instead of sftp.
-# ─────────────────────────────────────────────────────────────────────────────
-Match User ansible
-    ForceCommand wsl.exe -d $WslDistro -u ansible
-    AllowTcpForwarding no
-"@
-    Add-Content -Path $sshdConfigPath -Value $matchBlock -Encoding UTF8
-    Write-Info "Added 'Match User ansible' block to sshd_config."
+if (Set-SshdAnsibleMatchBlock -ConfigPath $sshdConfigPath -WslDistro $WslDistro) {
     $configChanged = $true
-} else {
-    Write-Info "'Match User ansible' block already present in sshd_config — skipping."
 }
 
-# ─── Restart sshd once if anything changed ────────────────────────────────────
+if (Repair-SshdConfigMatchLayout -ConfigPath $sshdConfigPath) {
+    $configChanged = $true
+}
+
+$sshdTest = Test-SshdConfigValid -ConfigPath $sshdConfigPath
+if (-not $sshdTest.Valid) {
+    Exit-Fatal "sshd_config is invalid (sshd -t failed): $($sshdTest.Output)"
+}
+Write-Info 'sshd_config syntax check (sshd -t) - OK'
+
+# ─── sshd service (after config is valid) ─────────────────────────────────────
+
+$sshdSvc = Get-Service -Name 'sshd'
+if ($sshdSvc.StartType -ne 'Automatic') {
+    Set-Service -Name 'sshd' -StartupType Automatic
+    Write-Info 'sshd set to automatic startup.'
+}
 
 if ($configChanged) {
-    Restart-Service sshd
-    Start-Sleep -Seconds 2
-    if ((Get-Service -Name 'sshd').Status -ne 'Running') {
-        Exit-Fatal 'sshd failed to restart after config changes.'
+    if ($sshdSvc.Status -eq 'Running') {
+        Restart-Service sshd
+        Write-Info 'sshd restarted with updated configuration.'
+    } else {
+        Start-Service -Name 'sshd'
+        Write-Info 'sshd started.'
     }
-    Write-Info 'sshd restarted with updated configuration — OK'
+} elseif ($sshdSvc.Status -ne 'Running') {
+    Start-Service -Name 'sshd'
+    Write-Info 'sshd started.'
 } else {
-    Write-Info 'sshd_config unchanged — no restart needed.'
+    Write-Info 'sshd already running - OK'
+}
+
+Start-Sleep -Seconds 2
+if ((Get-Service -Name 'sshd').Status -ne 'Running') {
+    $postTest = Test-SshdConfigValid -ConfigPath $sshdConfigPath
+    $hint = if ($postTest.Output) { " sshd -t: $($postTest.Output)" } else { '' }
+    Exit-Fatal "sshd is not running after configuration.$hint"
 }
 
 # ─── Validation ───────────────────────────────────────────────────────────────
@@ -173,9 +166,16 @@ Assert-Check "sshd_config: PubkeyAuthentication yes" `
     ($finalConfig -match '(?m)^PubkeyAuthentication\s+yes')
 Assert-Check "sshd_config: 'Match User ansible' block present" `
     ($finalConfig -match 'Match User ansible')
+Assert-Check 'sshd_config: ansible AuthorizedKeysFile absolute path' `
+    ($finalConfig -match '(?ms)Match User ansible.*?AuthorizedKeysFile\s+C:/Users/ansible/\.ssh/authorized_keys')
+Assert-Check 'sshd_config: ansible ForceCommand uses cmd.exe + wsl.exe' `
+    ($finalConfig -match '(?ms)Match User ansible.*?ForceCommand\s+[^\r\n]*cmd\.exe[^\r\n]*wsl\.exe')
+
+$sshdTestFinal = Test-SshdConfigValid -ConfigPath $sshdConfigPath
+Assert-Check 'sshd_config passes sshd -t' $sshdTestFinal.Valid
 
 if (-not $script:StageAllPassed) {
-    Write-Warn 'Stage 3 completed with warnings — review FAIL items above.'
+    Write-Warn 'Stage 3 completed with warnings - review FAIL items above.'
 } else {
     Write-Info 'Stage 3 complete.'
 }

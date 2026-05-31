@@ -3,7 +3,7 @@
 
 <#
 .SYNOPSIS
-    Stage 1 — Base machine configuration for the Windows homelab bootstrap.
+    Stage 1 - Base machine configuration for the Windows homelab bootstrap.
 
 .DESCRIPTION
     Applies foundational machine settings:
@@ -42,6 +42,50 @@ Write-Info '=== Stage 1: Base Machine Configuration ==='
 
 $script:StageAllPassed = $true
 
+function Invoke-PowerCfg {
+    param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
+
+    # Native stderr must not bubble up as a terminating error under $ErrorActionPreference = 'Stop'.
+    $output = & powercfg.exe @Arguments 2>&1
+    $text = ($output | Out-String).Trim()
+    $failed = ($LASTEXITCODE -ne 0) -or ($text -match 'does not exist|Unable to|Invalid Parameters')
+    return [pscustomobject]@{
+        Output = $text
+        Failed = $failed
+    }
+}
+
+function Set-PowerPlanSettingAlias {
+    param(
+        [string]$SubgroupAlias,
+        [string]$SettingAlias,
+        [uint32]$AcValue,
+        [uint32]$DcValue
+    )
+    $ac = Invoke-PowerCfg /setacvalueindex SCHEME_CURRENT $SubgroupAlias $SettingAlias $AcValue
+    $dc = Invoke-PowerCfg /setdcvalueindex SCHEME_CURRENT $SubgroupAlias $SettingAlias $DcValue
+    return (-not $ac.Failed) -and (-not $dc.Failed)
+}
+
+function Get-PowerPlanSettingValue {
+    param(
+        [string]$SubgroupAlias,
+        [string]$SettingAlias,
+        [ValidateSet('AC', 'DC')]
+        [string]$PowerSource
+    )
+    $result = Invoke-PowerCfg /query SCHEME_CURRENT $SubgroupAlias $SettingAlias
+    if ($result.Failed) { return $null }
+    $label = if ($PowerSource -eq 'AC') { 'Current AC Power Setting Index' } else { 'Current DC Power Setting Index' }
+    $match = [regex]::Match($result.Output, "${label}:\s*(0x[0-9a-fA-F]+)")
+    if (-not $match.Success) { return $null }
+    return [Convert]::ToInt32($match.Groups[1].Value, 16)
+}
+
+function Enable-PowerPlanChanges {
+    Invoke-PowerCfg /setactive SCHEME_CURRENT | Out-Null
+}
+
 # ─── Hostname ─────────────────────────────────────────────────────────────────
 
 if ($Hostname) {
@@ -51,20 +95,31 @@ if ($Hostname) {
         # The next run will see the correct hostname and skip this step.
         Request-Reboot -Reason 'hostname change' -PromptReboot:$PromptReboot
     } else {
-        Write-Info "Hostname already '$Hostname' — skipping."
+        Write-Info "Hostname already '$Hostname' - skipping."
     }
 }
 
 # ─── Power settings ───────────────────────────────────────────────────────────
 
-# Disable sleep and hibernation — essential for a headless homelab node
+# Disable sleep and hibernation - essential for a headless homelab node
 Write-Info 'Configuring power settings...'
-powercfg /change standby-timeout-ac   0 | Out-Null
-powercfg /change standby-timeout-dc   0 | Out-Null
-powercfg /change hibernate-timeout-ac  0 | Out-Null
-powercfg /change hibernate-timeout-dc  0 | Out-Null
-powercfg /change monitor-timeout-ac   0 | Out-Null
-powercfg /h off 2>&1 | Out-Null  # Disable hibernate file; no-op if already off
+
+# /change works on most systems including overlay power schemes.
+Invoke-PowerCfg /change standby-timeout-ac 0 | Out-Null
+Invoke-PowerCfg /change standby-timeout-dc 0 | Out-Null
+Invoke-PowerCfg /change hibernate-timeout-ac 0 | Out-Null
+Invoke-PowerCfg /change hibernate-timeout-dc 0 | Out-Null
+Invoke-PowerCfg /change monitor-timeout-ac 0 | Out-Null
+Invoke-PowerCfg /change monitor-timeout-dc 0 | Out-Null
+Invoke-PowerCfg /h off | Out-Null
+
+# Alias-based settings apply on classic power schemes; no-op if unavailable.
+if (Set-PowerPlanSettingAlias -SubgroupAlias SUB_SLEEP -SettingAlias STANDBYIDLE -AcValue 0 -DcValue 0) {
+    Set-PowerPlanSettingAlias -SubgroupAlias SUB_SLEEP -SettingAlias HIBERNATEIDLE -AcValue 0 -DcValue 0 | Out-Null
+    Set-PowerPlanSettingAlias -SubgroupAlias SUB_VIDEO -SettingAlias VIDEOCONLOCK -AcValue 0 -DcValue 0 | Out-Null
+    Enable-PowerPlanChanges
+}
+
 Write-Info 'Power settings configured (sleep/hibernate disabled).'
 
 # ─── Validation ───────────────────────────────────────────────────────────────
@@ -73,24 +128,26 @@ Write-Info '--- Stage 1 validation ---'
 
 if ($Hostname) {
     Assert-Check "Hostname is '$Hostname'" ($env:COMPUTERNAME -eq $Hostname) `
-        'Hostname rename requires a reboot — rerun after rebooting'
+        'Hostname rename requires a reboot - rerun after rebooting'
 }
 
-# Query the active power scheme and parse standby/hibernate timeouts
-$powerQuery = powercfg /query SCHEME_CURRENT 2>&1 | Out-String
+# Query standby timeouts when the platform exposes them (skipped on Modern Standby).
+$acStandby = Get-PowerPlanSettingValue -SubgroupAlias SUB_SLEEP -SettingAlias STANDBYIDLE -PowerSource AC
+$dcStandby = Get-PowerPlanSettingValue -SubgroupAlias SUB_SLEEP -SettingAlias STANDBYIDLE -PowerSource DC
 
-# AC standby (sleep) — subgroup 238C9FA8, setting 29F6C1DB
-$acStandbyMatch  = [regex]::Match($powerQuery, '(?s)29F6C1DB-FC31-4B2C-9F73-CF4A82C3B5B0.*?Current AC Power Setting Index: (0x[0-9a-fA-F]+)')
-# DC standby (sleep) — same subgroup/setting
-$dcStandbyMatch  = [regex]::Match($powerQuery, '(?s)29F6C1DB-FC31-4B2C-9F73-CF4A82C3B5B0.*?Current DC Power Setting Index: (0x[0-9a-fA-F]+)')
-$acStandbyOk     = $acStandbyMatch.Success -and ([Convert]::ToInt32($acStandbyMatch.Groups[1].Value, 16) -eq 0)
-$dcStandbyOk     = $dcStandbyMatch.Success -and ([Convert]::ToInt32($dcStandbyMatch.Groups[1].Value, 16) -eq 0)
-
-Assert-Check 'Power: AC standby timeout = 0' $acStandbyOk 'Run: powercfg /change standby-timeout-ac 0'
-Assert-Check 'Power: DC standby timeout = 0' $dcStandbyOk 'Run: powercfg /change standby-timeout-dc 0'
+if ($null -eq $acStandby -and $null -eq $dcStandby) {
+    Write-Info 'Power: sleep timeout settings not queryable on this system - skipping standby validation.'
+} else {
+    if ($null -ne $acStandby) {
+        Assert-Check 'Power: AC standby timeout = 0' ($acStandby -eq 0) 'Run: powercfg /change standby-timeout-ac 0'
+    }
+    if ($null -ne $dcStandby) {
+        Assert-Check 'Power: DC standby timeout = 0' ($dcStandby -eq 0) 'Run: powercfg /change standby-timeout-dc 0'
+    }
+}
 
 if (-not $script:StageAllPassed) {
-    Write-Warn 'Stage 1 completed with warnings — review FAIL items above.'
+    Write-Warn 'Stage 1 completed with warnings - review FAIL items above.'
 } else {
     Write-Info 'Stage 1 complete.'
 }
