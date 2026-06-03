@@ -1,0 +1,14 @@
+all:
+  children:
+
+    windows:
+      hosts:
+        lab-devops:
+          ansible_host: lab-devops
+          ansible_user: devops
+
+    linux:
+      hosts:
+        lab-ansible:
+          ansible_host: lab-ansible
+          ansible_user: ansible

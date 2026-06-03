@@ -1,0 +1,4 @@
+---
+ansible_connection: ssh
+ansible_shell_type: powershell
+ansible_pipelining: true

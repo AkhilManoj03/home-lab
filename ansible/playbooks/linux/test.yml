@@ -1,0 +1,17 @@
+---
+- name: Validate Linux connectivity
+  hosts: lab-ansible
+  gather_facts: true
+  tasks:
+    - name: Display Linux environment info
+      ansible.builtin.debug:
+        msg:
+          - "Inventory host: {{ inventory_hostname }}"
+          - "Ansible host: {{ ansible_host }}"
+          - "Connected as: {{ ansible_user_id }}"
+          - "FQDN: {{ ansible_fqdn | default('n/a') }}"
+          - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_os_family }})"
+          - "Kernel: {{ ansible_kernel }}"
+          - "Architecture: {{ ansible_architecture }}"
+          - "Python: {{ ansible_python_version }}"
+          - "Default IPv4: {{ ansible_default_ipv4.address | default('n/a') }}"

@@ -1,0 +1,9 @@
+---
+- name: Install Docker Engine and Compose on lab-ansible
+  hosts: lab-ansible
+  become: true
+  gather_facts: true
+  roles:
+    - role: docker
+      tags:
+        - docker

@@ -1,0 +1,15 @@
+---
+- name: Validate Windows connectivity
+  hosts: lab-devops
+  gather_facts: true
+  tasks:
+    - name: Display Windows environment info
+      ansible.builtin.debug:
+        msg:
+          - "Inventory host: {{ inventory_hostname }}"
+          - "Ansible host: {{ ansible_host }}"
+          - "Connected as: {{ ansible_user_id | default(ansible_env.USERNAME | default('n/a')) }}"
+          - "Computer name: {{ ansible_hostname }}"
+          - "OS: {{ ansible_distribution | default('Windows') }} {{ ansible_distribution_version | default('n/a') }}"
+          - "Architecture: {{ ansible_architecture | default('n/a') }}"
+          - "IPv4 addresses: {{ ansible_ip_addresses | default(['n/a']) | join(', ') }}"

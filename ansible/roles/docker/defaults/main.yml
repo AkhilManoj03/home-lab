@@ -1,0 +1,29 @@
+---
+docker_packages:
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-ce
+  - docker-ce-cli
+  - docker-compose-plugin
+
+docker_apt_components: stable
+docker_apt_key_url: https://download.docker.com/linux/{{ docker_apt_distribution }}/gpg
+docker_apt_key_path: /etc/apt/keyrings/docker.asc
+docker_apt_repository_name: docker
+docker_apt_uri: https://download.docker.com/linux/{{ docker_apt_distribution }}
+
+docker_group_user: "{{ ansible_user }}"
+
+docker_prerequisite_packages:
+  - ca-certificates
+  - curl
+  - python3-debian
+
+docker_apt_arch_map:
+  aarch64: arm64
+  armv7l: armhf
+  x86_64: amd64
+
+docker_apt_arch: "{{ docker_apt_arch_map[ansible_architecture] | default(ansible_architecture) }}"
+docker_apt_distribution: "{{ ansible_distribution | lower }}"
+docker_apt_suite: "{{ ansible_distribution_release }}"

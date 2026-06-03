@@ -1,0 +1,62 @@
+---
+- name: Validate supported OS family
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == "Debian"
+    fail_msg: "Docker role supports Debian family hosts only (got {{ ansible_os_family }})."
+
+- name: Validate Docker APT architecture mapping
+  ansible.builtin.assert:
+    that:
+      - docker_apt_arch in docker_apt_arch_map.values()
+    fail_msg: >-
+      Unsupported architecture {{ ansible_architecture }} for Docker APT packages.
+      Add a mapping in docker_apt_arch_map.
+
+- name: Install Docker prerequisites
+  ansible.builtin.apt:
+    name: "{{ docker_prerequisite_packages }}"
+    state: present
+    update_cache: true
+
+- name: Ensure APT keyrings directory exists
+  ansible.builtin.file:
+    path: "{{ docker_apt_key_path | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Install Docker APT signing key
+  ansible.builtin.get_url:
+    url: "{{ docker_apt_key_url }}"
+    dest: "{{ docker_apt_key_path }}"
+    mode: "0644"
+    force: false
+
+- name: Configure Docker APT repository
+  ansible.builtin.deb822_repository:
+    name: "{{ docker_apt_repository_name }}"
+    types: deb
+    uris: "{{ docker_apt_uri }}"
+    suites: "{{ docker_apt_suite }}"
+    components: "{{ docker_apt_components }}"
+    architectures: "{{ docker_apt_arch }}"
+    signed_by: "{{ docker_apt_key_path }}"
+
+- name: Install Docker Engine and Compose plugin
+  ansible.builtin.apt:
+    name: "{{ docker_packages }}"
+    state: present
+    update_cache: true
+  notify: Restart Docker
+
+- name: Ensure Docker service is enabled and running
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Add user to docker group
+  ansible.builtin.user:
+    name: "{{ docker_group_user }}"
+    groups: docker
+    append: true

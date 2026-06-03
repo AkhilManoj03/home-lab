@@ -1,0 +1,10 @@
+---
+ansible_shell_type: sh
+ansible_shell_executable: /bin/bash
+ansible_ssh_transfer_method: scp
+ansible_pipelining: true
+# Windows OpenSSH ForceCommand into WSL: no TTY (avoids conhost noise) and pipelining (no sftp).
+ansible_ssh_common_args: '-o RequestTTY=no'
+ansible_python_interpreter: /usr/bin/python3
+# Non-interactive sudo: no TTY means sudo cannot prompt; NOPASSWD still needs -n for Ansible become.
+ansible_become_flags: '-n'
