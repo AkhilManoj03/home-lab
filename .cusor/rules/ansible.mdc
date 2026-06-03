@@ -1,0 +1,56 @@
+---
+description: Ansible coding standards and repository conventions
+globs: ansible/**/*.yml,ansible/**/*.yaml
+alwaysApply: false
+---
+
+# Ansible Standards
+
+These instructions apply only to files within the `ansible/` directory.
+
+## General Principles
+
+- Follow Ansible best practices.
+- Prefer clarity and maintainability over clever implementations.
+- Preserve idempotency.
+- Prefer reusable roles over duplicated task definitions.
+- Keep changes minimal and consistent with the existing repository structure.
+- Follow existing patterns already used in the repository.
+
+## Task Requirements
+
+- Every task must have a descriptive `name`.
+- Prefer Ansible modules over shell, command, or raw tasks.
+- Use Fully Qualified Collection Names (FQCN) where practical.
+- Avoid unnecessary complexity or custom scripting when native modules exist.
+- Use handlers for service restarts and reloads.
+
+## Variables
+
+- Avoid hardcoded values whenever variables are appropriate.
+- Place configurable values in defaults, vars, group_vars, or host_vars as appropriate.
+- Use meaningful variable names.
+- Reuse existing variables when available instead of introducing duplicates.
+
+## Roles
+
+When creating or modifying roles:
+
+- Follow the standard Ansible role layout.
+- Keep task files focused and reasonably small.
+- Store configurable defaults in `defaults/main.yml`.
+- Store handlers in `handlers/main.yml`.
+- Prefer role reuse instead of copying tasks between roles.
+
+## Playbooks
+
+- Keep playbooks focused on orchestration.
+- Prefer invoking roles over large inline task lists.
+- Use tags when consistent with existing repository conventions.
+- Avoid embedding inventory-specific values directly in playbooks.
+
+## YAML
+
+- Maintain consistent formatting.
+- Use valid YAML syntax.
+- Preserve existing formatting conventions used by the repository.

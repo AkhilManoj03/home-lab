@@ -1,0 +1,59 @@
+---
+description: Prevent unsafe or non-idempotent Ansible changes
+globs: ansible/**/*.yml,ansible/**/*.yaml
+alwaysApply: false
+---
+
+# Ansible Safety Rules
+
+## Shell Usage
+
+Do not use:
+
+- ansible.builtin.shell
+- ansible.builtin.command
+- raw
+
+when an Ansible module exists that accomplishes the same task.
+
+If shell or command is required:
+
+- Explain why no suitable module exists.
+- Use `changed_when` when appropriate.
+- Use `failed_when` when appropriate.
+
+## Idempotency
+
+Changes must remain idempotent.
+
+Avoid tasks that:
+
+- Always report changed.
+- Execute destructive operations unnecessarily.
+- Restart services on every run.
+- Recreate resources that already exist.
+
+## Secrets
+
+Never:
+
+- Commit plaintext secrets.
+- Store passwords directly in playbooks.
+- Store API keys directly in playbooks.
+- Store tokens directly in playbooks.
+
+Use repository-approved secret management mechanisms such as Ansible Vault when secrets are required.
+
+## Service Management
+
+- Use handlers for restarts and reloads.
+- Notify handlers only when changes occur.
+- Avoid direct service restarts from tasks unless justified.
+
+## Repository Consistency
+
+Before creating new roles, variables, inventories, or playbooks:
+
+- Check for existing implementations.
+- Reuse existing patterns whenever possible.
+- Avoid introducing duplicate functionality.

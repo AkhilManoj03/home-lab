@@ -1,0 +1,49 @@
+---
+description: Required validation for Ansible changes
+globs: ansible/**
+alwaysApply: false
+---
+
+# Validation Requirements
+
+Before considering any Ansible-related task complete:
+
+## Required Checks
+
+1. Run ansible-lint against modified content.
+
+Example:
+
+```bash
+ansible-lint
+````
+
+2. Run syntax validation for modified playbooks when applicable.
+
+Example:
+
+```bash
+ansible-playbook --syntax-check <playbook>
+```
+
+3. Resolve all linting and syntax errors.
+
+4. Do not ignore lint failures unless explicitly instructed by the user.
+
+## Completion Requirements
+
+Before reporting work as complete:
+
+* Verify linting passes.
+* Verify syntax validation passes.
+* Verify variable references are valid.
+* Verify handlers are correctly notified.
+* Verify task changes remain idempotent.
+
+## Final Response
+
+When Ansible files were modified:
+
+* Report validation commands executed.
+* Report validation results.
+* Clearly identify any validation that could not be executed and why.
