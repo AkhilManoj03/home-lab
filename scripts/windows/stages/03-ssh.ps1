@@ -99,6 +99,9 @@ if (Set-SshdConfigGlobalOption -ConfigPath $sshdConfigPath -Key 'PasswordAuthent
 if (Set-SshdConfigGlobalOption -ConfigPath $sshdConfigPath -Key 'PubkeyAuthentication' -Value 'yes') {
     $configChanged = $true
 }
+if (Set-SshdConfigGlobalOption -ConfigPath $sshdConfigPath -Key 'SetEnv' -Value 'WSLENV=SSH_ORIGINAL_COMMAND/u') {
+    $configChanged = $true
+}
 
 Write-Info '--- SSH user experience (ansible ForceCommand) ---'
 
@@ -168,8 +171,12 @@ Assert-Check "sshd_config: 'Match User ansible' block present" `
     ($finalConfig -match 'Match User ansible')
 Assert-Check 'sshd_config: ansible AuthorizedKeysFile absolute path' `
     ($finalConfig -match '(?ms)Match User ansible.*?AuthorizedKeysFile\s+C:/Users/ansible/\.ssh/authorized_keys')
-Assert-Check 'sshd_config: ansible ForceCommand uses cmd.exe + wsl.exe' `
-    ($finalConfig -match '(?ms)Match User ansible.*?ForceCommand\s+[^\r\n]*cmd\.exe[^\r\n]*wsl\.exe')
+Assert-Check 'sshd_config: ansible ForceCommand uses WSL wrapper script' `
+    ($finalConfig -match '(?ms)Match User ansible.*?ForceCommand\s+[^\r\n]*ansible-wsl-forcecommand\.bat')
+Assert-Check 'ansible WSL ForceCommand shell script exists' `
+    (Test-Path (Join-Path $env:ProgramData 'ssh\ansible-wsl-forcecommand.sh'))
+Assert-Check 'sshd_config: SetEnv WSLENV forwards SSH_ORIGINAL_COMMAND' `
+    ($finalConfig -match '(?m)^SetEnv\s+WSLENV=SSH_ORIGINAL_COMMAND/u')
 
 $sshdTestFinal = Test-SshdConfigValid -ConfigPath $sshdConfigPath
 Assert-Check 'sshd_config passes sshd -t' $sshdTestFinal.Valid

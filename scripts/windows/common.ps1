@@ -972,14 +972,84 @@ function Sync-WslRegistryToAnsibleProfile {
     return $true
 }
 
+function Get-SshdAnsibleWslForceCommandScriptPath {
+    return Join-Path $env:ProgramData 'ssh\ansible-wsl-forcecommand.bat'
+}
+
+function Get-SshdAnsibleWslForceCommandShellPath {
+    return Join-Path $env:ProgramData 'ssh\ansible-wsl-forcecommand.sh'
+}
+
+function ConvertTo-WslPath {
+    param([string]$WindowsPath)
+    if ($WindowsPath -match '^([A-Za-z]):\\(.*)$') {
+        return "/mnt/$($Matches[1].ToLower())/$($Matches[2] -replace '\\', '/')"
+    }
+    throw "Invalid Windows path for WSL conversion: $WindowsPath"
+}
+
+function Install-SshdAnsibleWslForceCommandScript {
+    <#
+    Writes a cmd wrapper plus a bash script that forwards SSH_ORIGINAL_COMMAND
+    into WSL so Ansible non-interactive sessions work. Interactive SSH (empty
+    command) still drops into a login shell.
+    #>
+    param(
+        [string]$WslDistro,
+        [string]$LinuxUser = 'ansible'
+    )
+
+    $batPath   = Get-SshdAnsibleWslForceCommandScriptPath
+    $shellPath = Get-SshdAnsibleWslForceCommandShellPath
+    $wslExe    = Join-Path $env:SystemRoot 'System32\wsl.exe'
+    $wslScript = ConvertTo-WslPath -WindowsPath $shellPath
+
+    $shellScript = @'
+#!/bin/bash
+if [ -n "$SSH_ORIGINAL_COMMAND" ]; then
+  exec /bin/bash -lc "$SSH_ORIGINAL_COMMAND"
+else
+  exec /bin/bash -l
+fi
+'@
+
+    $batScript = @"
+@echo off
+"$wslExe" -d $WslDistro -u $LinuxUser -- /bin/bash $wslScript
+"@
+
+    $changed = $false
+    $existingShell = if ([System.IO.File]::Exists($shellPath)) { [System.IO.File]::ReadAllText($shellPath) } else { '' }
+    if ($existingShell -cne $shellScript) {
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($shellPath, $shellScript.Replace("`r`n", "`n"), $utf8NoBom)
+        Write-Info "Wrote ansible WSL ForceCommand shell script to $shellPath."
+        $changed = $true
+    } else {
+        Write-Info "ansible WSL ForceCommand shell script already up to date at $shellPath."
+    }
+
+    $existingBat = if ([System.IO.File]::Exists($batPath)) { [System.IO.File]::ReadAllText($batPath) } else { '' }
+    if ($existingBat -cne $batScript) {
+        [System.IO.File]::WriteAllText($batPath, $batScript)
+        Write-Info "Wrote ansible WSL ForceCommand wrapper to $batPath."
+        $changed = $true
+    } else {
+        Write-Info "ansible WSL ForceCommand wrapper already up to date at $batPath."
+    }
+
+    return $changed
+}
+
 function Get-SshdWslForceCommandLine {
     param(
         [string]$WslDistro,
         [string]$LinuxUser = 'ansible'
     )
-    $cmdExe = Join-Path $env:SystemRoot 'System32\cmd.exe'
-    $wslExe = Join-Path $env:SystemRoot 'System32\wsl.exe'
-    return "ForceCommand $cmdExe /c $wslExe -d $WslDistro -u $LinuxUser --cd ~"
+    Install-SshdAnsibleWslForceCommandScript -WslDistro $WslDistro -LinuxUser $LinuxUser | Out-Null
+    $cmdExe  = Join-Path $env:SystemRoot 'System32\cmd.exe'
+    $wrapper = Get-SshdAnsibleWslForceCommandScriptPath
+    return "ForceCommand $cmdExe /c `"$wrapper`""
 }
 
 function Set-SshdAnsibleMatchBlock {
