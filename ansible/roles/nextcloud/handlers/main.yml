@@ -1,0 +1,8 @@
+---
+- name: Redeploy nextcloud stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ nextcloud_service_path }}"
+    project_name: "{{ nextcloud_compose_project_name }}"
+    state: present
+    recreate: auto
+    pull: missing

@@ -1,0 +1,39 @@
+---
+nextcloud_service_path: "{{ homelab_services_root }}/nextcloud"
+nextcloud_data_path: "{{ homelab_data_root }}/nextcloud"
+nextcloud_compose_project_name: nextcloud
+
+nextcloud_image: docker.io/library/nextcloud
+nextcloud_image_tag: "31.0.7"
+nextcloud_web_container_name: "{{ nextcloud_web_container }}"
+
+nextcloud_mariadb_image: docker.io/library/mariadb
+nextcloud_mariadb_tag: "10.11"
+nextcloud_redis_image: docker.io/library/redis
+nextcloud_redis_tag: "7"
+
+nextcloud_db_name: nextcloud
+nextcloud_db_user: nextcloud
+nextcloud_admin_user: admin
+
+nextcloud_data_subdirs:
+  - "{{ nextcloud_data_path }}/html"
+  - "{{ nextcloud_data_path }}/mariadb"
+  - "{{ nextcloud_data_path }}/redis"
+
+# Tailscale Service VIP port (HTTPS terminated by Tailscale; app stays on nextcloud_web_port).
+nextcloud_tailscale_port: 443
+
+# Passed to tailscale_services role via include_role after the stack is deployed.
+nextcloud_tailscale_service:
+  name: nextcloud
+  port: "{{ nextcloud_tailscale_port }}"
+  protocol: https
+  web_hostname: "{{ nextcloud_service_hostname }}"
+  destination: "http://127.0.0.1:{{ nextcloud_web_port }}"
+  comment: Nextcloud
+  legacy_ports: []
+  # Destination is resolved from Windows (lab-devops). With WSL mirrored networking,
+  # 127.0.0.1:<port> on WSL is often reachable as localhost from Windows.
+
+nextcloud_url: "https://{{ nextcloud_service_hostname }}"

@@ -1,0 +1,49 @@
+---
+- name: Ensure nextcloud service directory exists
+  ansible.builtin.file:
+    path: "{{ nextcloud_service_path }}"
+    state: directory
+    mode: "0755"
+
+- name: Ensure nextcloud data directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ nextcloud_data_subdirs }}"
+
+- name: Validate nextcloud secrets from Ansible Vault
+  ansible.builtin.assert:
+    that:
+      - nextcloud_db_password is defined
+      - nextcloud_db_password | length > 0
+      - nextcloud_admin_password is defined
+      - nextcloud_admin_password | length > 0
+    quiet: true
+    fail_msg: >-
+      NEXTCLOUD_DB_PASSWORD and NEXTCLOUD_ADMIN_PASSWORD must be set in ansible/vault.yml.
+
+- name: Render nextcloud compose file
+  ansible.builtin.template:
+    src: nextcloud/docker-compose.yml.j2
+    dest: "{{ nextcloud_service_path }}/docker-compose.yml"
+    mode: "0640"
+  notify: Redeploy nextcloud stack
+
+- name: Deploy nextcloud stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ nextcloud_service_path }}"
+    project_name: "{{ nextcloud_compose_project_name }}"
+    state: present
+    pull: missing
+
+- name: Publish Nextcloud via Tailscale Service
+  ansible.builtin.include_role:
+    name: tailscale_services
+    apply:
+      tags:
+        - tailscale_services
+  vars:
+    tailscale_services_service: "{{ nextcloud_tailscale_service }}"
+  tags:
+    - tailscale_services

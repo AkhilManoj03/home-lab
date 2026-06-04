@@ -1,0 +1,44 @@
+---
+services:
+  redis:
+    image: "{{ nextcloud_redis_image }}:{{ nextcloud_redis_tag }}"
+    restart: unless-stopped
+    volumes:
+      - "{{ nextcloud_data_path }}/redis:/data"
+
+  db:
+    image: "{{ nextcloud_mariadb_image }}:{{ nextcloud_mariadb_tag }}"
+    restart: unless-stopped
+    command: --transaction-isolation=READ-COMMITTED --log-bin=binlog --binlog-format=ROW
+    volumes:
+      - "{{ nextcloud_data_path }}/mariadb:/var/lib/mysql"
+    environment:
+      MYSQL_ROOT_PASSWORD: "{{ nextcloud_db_password }}"
+      MYSQL_DATABASE: "{{ nextcloud_db_name }}"
+      MYSQL_USER: "{{ nextcloud_db_user }}"
+      MYSQL_PASSWORD: "{{ nextcloud_db_password }}"
+
+  app:
+    image: "{{ nextcloud_image }}:{{ nextcloud_image_tag }}"
+    container_name: "{{ nextcloud_web_container_name }}"
+    restart: unless-stopped
+    depends_on:
+      - db
+      - redis
+    ports:
+      - "127.0.0.1:{{ nextcloud_web_port }}:80"
+    volumes:
+      - "{{ nextcloud_data_path }}/html:/var/www/html"
+    environment:
+      MYSQL_HOST: db
+      MYSQL_DATABASE: "{{ nextcloud_db_name }}"
+      MYSQL_USER: "{{ nextcloud_db_user }}"
+      MYSQL_PASSWORD: "{{ nextcloud_db_password }}"
+      REDIS_HOST: redis
+      NEXTCLOUD_ADMIN_USER: "{{ nextcloud_admin_user }}"
+      NEXTCLOUD_ADMIN_PASSWORD: "{{ nextcloud_admin_password }}"
+      NEXTCLOUD_TRUSTED_DOMAINS: "{{ nextcloud_service_hostname }}"
+      OVERWRITEHOST: "{{ nextcloud_service_hostname }}"
+      OVERWRITEPROTOCOL: https
+      OVERWRITECLIURL: "{{ nextcloud_url }}"
+      TRUSTED_PROXIES: "{{ nextcloud_trusted_proxies | default('172.16.0.0/12 10.0.0.0/8 192.168.0.0/16') }}"

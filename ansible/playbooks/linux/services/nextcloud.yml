@@ -1,0 +1,9 @@
+---
+- name: Deploy Nextcloud stack
+  hosts: lab-ansible
+  become: true
+  gather_facts: true
+  roles:
+    - role: nextcloud
+      tags:
+        - nextcloud
