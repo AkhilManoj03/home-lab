@@ -1,0 +1,9 @@
+---
+- name: Deploy homelab infrastructure
+  ansible.builtin.import_playbook: infra.yml
+
+- name: Deploy Paperless-ngx
+  ansible.builtin.import_playbook: paperless.yml
+
+- name: Deploy Nextcloud
+  ansible.builtin.import_playbook: nextcloud.yml
