@@ -1,0 +1,33 @@
+---
+# Set by the including role (e.g. paperless_tailscale_service).
+tailscale_services_service: {}
+
+# https: VIP port uses Tailscale-terminated TLS; configure host via serve set-raw (not v0.0.1 set-config JSON).
+tailscale_services_supported_protocols:
+  - http
+  - https
+  - tcp
+
+tailscale_services_api_base_url: https://api.tailscale.com/api/v2
+tailscale_services_api_tailnet: "-"
+
+# Windows host that runs tailscale.exe (Tailscale node for this homelab).
+tailscale_services_cli_host: lab-devops
+tailscale_services_cli_binary: 'C:\Program Files\Tailscale\tailscale.exe'
+tailscale_services_cli_config_dir: C:\ProgramData\homelab\tailscale-services
+
+# Service hosts must be tag-authenticated devices (not user logins). See Tailscale Services docs.
+tailscale_services_required_tags: tag:homelab
+
+# Control plane may lag after set-raw + advertise before configured becomes "ready".
+tailscale_services_verify_retries: 12
+tailscale_services_verify_delay: 10
+
+# HTTPS: set-raw alone does not issue certs; serve --https + optional daemon restart does.
+tailscale_services_https_probe_timeout: 5
+# Seconds to wait after starting serve --https before killing the CLI (avoids 2min Ansible hang).
+tailscale_services_https_cert_grace_seconds: 15
+# Pause on the controller after a background Tailscale restart is queued (not on Windows/WinRM).
+tailscale_services_restart_wait_seconds: 30
+tailscale_services_https_functional_retries: 24
+tailscale_services_https_functional_delay: 10

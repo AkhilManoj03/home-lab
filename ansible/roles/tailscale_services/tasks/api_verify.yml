@@ -1,0 +1,92 @@
+---
+- name: List devices hosting this Tailscale service (post-config verification)
+  ansible.builtin.uri:
+    url: >-
+      {{ tailscale_services_api_base_url }}/tailnet/{{ tailscale_services_api_tailnet | urlencode }}/services/{{
+      tailscale_services_api_service_name | urlencode }}/devices
+    method: GET
+    headers:
+      Authorization: "Bearer {{ tailscale_services_api_key }}"
+    status_code:
+      - 200
+  register: tailscale_services_api_verify_hosts
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+  until: >-
+    (
+      tailscale_services_api_verify_hosts.json.hosts | default([])
+      | selectattr('nodeId', 'equalto', tailscale_services_node_id)
+      | list
+      | first
+      | default({})
+      | json_query('configured')
+    ) == 'ready'
+  retries: "{{ tailscale_services_verify_retries }}"
+  delay: "{{ tailscale_services_verify_delay }}"
+
+- name: Resolve verified service host entry for this node
+  ansible.builtin.set_fact:
+    tailscale_services_verify_host_entry: >-
+      {{
+        tailscale_services_api_verify_hosts.json.hosts | default([])
+        | selectattr('nodeId', 'equalto', tailscale_services_node_id)
+        | list
+        | first
+        | default({})
+      }}
+
+- name: Debug verified Tailscale service host entry
+  ansible.builtin.debug:
+    msg: "Verified Tailscale service host: {{ tailscale_services_verify_host_entry }}"
+  when: tailscale_services_verify_host_entry | length > 0
+
+- name: Verify Tailscale Service host is registered and ready
+  ansible.builtin.assert:
+    that:
+      - tailscale_services_verify_host_entry | length > 0
+      - tailscale_services_verify_host_entry.configured | default('') == 'ready'
+    quiet: true
+    fail_msg: >-
+      Service host for {{ tailscale_services_api_service_name }} on node
+      {{ tailscale_services_node_id }} is not ready in the control plane
+      (hosts: {{ tailscale_services_api_verify_hosts.json.hosts | default([]) }}).
+      On {{ tailscale_services_cli_host }}: tailscale serve status --json --service={{ tailscale_services_api_service_name }},
+      then tailscale serve advertise {{ tailscale_services_api_service_name }}.
+      Ensure the host is tag-authenticated ({{ tailscale_services_required_tags }}) and the VIP advertises tcp:{{ tailscale_services_service.port }}.
+
+- name: Verify Tailscale Service HTTPS endpoint responds
+  ansible.builtin.command:
+    cmd: >-
+      curl -fsS -o /dev/null -w '%{http_code}'
+      --max-time {{ tailscale_services_https_probe_timeout }}
+      https://{{ tailscale_services_service.web_hostname }}/
+  delegate_to: localhost
+  become: false
+  register: tailscale_services_https_functional
+  until: >-
+    tailscale_services_https_functional.rc == 0
+    and (tailscale_services_https_functional.stdout | trim) in ['200', '301', '302']
+  retries: "{{ tailscale_services_https_functional_retries }}"
+  delay: "{{ tailscale_services_https_functional_delay }}"
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - tailscale_services_service.web_hostname is defined
+
+- name: Assert Tailscale Service HTTPS endpoint responds
+  ansible.builtin.assert:
+    that:
+      - tailscale_services_https_functional.rc == 0
+      - (tailscale_services_https_functional.stdout | trim) in ['200', '301', '302']
+    quiet: true
+    fail_msg: >-
+      HTTPS to https://{{ tailscale_services_service.web_hostname }}/ failed (TLS or proxy not working).
+      Enable HTTPS certificates for your tailnet in the Tailscale admin console (DNS settings),
+      then on {{ tailscale_services_cli_host }} run:
+      tailscale serve --yes --bg --service={{ tailscale_services_api_service_name }}
+      --https={{ tailscale_services_service.port }} {{ tailscale_services_serve_target | default('127.0.0.1:' ~ tailscale_services_service.port) }}
+      and Restart-Service Tailscale.
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - tailscale_services_service.web_hostname is defined

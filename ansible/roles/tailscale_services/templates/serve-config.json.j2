@@ -1,0 +1,7 @@
+{
+  "version": "0.0.1",
+  "advertised": true,
+  "endpoints": {
+    "tcp:{{ tailscale_services_service.port }}": "{% if tailscale_services_service.destination is defined %}{{ tailscale_services_service.destination }}{% elif tailscale_services_service.protocol == 'https' %}https://127.0.0.1:{{ tailscale_services_service.port }}{% elif tailscale_services_service.protocol == 'http' %}http://127.0.0.1:{{ tailscale_services_service.port }}{% else %}tcp://127.0.0.1:{{ tailscale_services_service.port }}{% endif %}"
+  }
+}

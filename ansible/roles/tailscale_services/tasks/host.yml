@@ -1,0 +1,417 @@
+---
+# Service host proxy configuration runs on lab-devops where tailscale.exe is installed.
+# Applications in WSL must bind a destination reachable from Windows (see paperless destination).
+
+- name: Resolve Tailscale serve backend target from destination URL
+  ansible.builtin.set_fact:
+    tailscale_services_serve_target: >-
+      {{
+        tailscale_services_service.destination
+        | regex_replace('^https?://', '')
+        if tailscale_services_service.destination is defined
+        else ('127.0.0.1:' ~ tailscale_services_service.port)
+      }}
+
+- name: Ensure Tailscale serve config directory exists on CLI host
+  ansible.windows.win_file:
+    path: "{{ tailscale_services_cli_config_dir }}"
+    state: directory
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+
+# --- HTTPS / Tailscale Services (svc:*) ---
+# set-config JSON maps tcp:443 -> http://backend but does NOT set HTTPS:true (tailscale#18381).
+# set-raw with ipn.ServeConfig (from serve status --json shape) is required for control plane "ready".
+- name: Read Tailscale serve status for HTTPS idempotency check
+  ansible.windows.win_command:
+    argv:
+      - "{{ tailscale_services_cli_binary }}"
+      - serve
+      - status
+      - --json
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  register: tailscale_services_serve_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: tailscale_services_service.protocol == 'https'
+
+- name: Detect whether Tailscale Service HTTPS endpoint is already active locally
+  ansible.builtin.set_fact:
+    tailscale_services_https_active: >-
+      {{
+        (
+          tailscale_services_serve_status.stdout | default('{}') | from_json
+          | json_query(
+              'Services."'
+              ~ tailscale_services_api_service_name
+              ~ '".TCP."'
+              ~ (tailscale_services_service.port | string)
+              ~ '".HTTPS'
+            )
+        ) | default(false) | bool
+      }}
+  when: tailscale_services_service.protocol == 'https'
+
+- name: Find Tailscale serve-raw fragment files on CLI host
+  ansible.windows.win_find:
+    paths: "{{ tailscale_services_cli_config_dir }}"
+    patterns: "*-serve-raw.json"
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  register: tailscale_services_serve_raw_fragments
+  when: tailscale_services_service.protocol == 'https'
+
+- name: Detect drift between stored serve fragments and live serve configuration
+  ansible.builtin.set_fact:
+    tailscale_services_serve_config_drift: >-
+      {{
+        (
+          tailscale_services_serve_raw_fragments.files | default([])
+          | map(attribute='filename')
+          | map('regex_replace', '-serve-raw\.json$', '')
+          | map('regex_replace', '^', 'svc:')
+          | list
+          | difference(
+              (tailscale_services_serve_status.stdout | default('{}') | from_json).Services
+              | default({}) | dict2items | map(attribute='key') | list
+            )
+          | length
+        ) > 0
+      }}
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - tailscale_services_serve_raw_fragments is not skipped
+
+- name: Determine whether Tailscale HTTPS serve configuration must be applied
+  ansible.builtin.set_fact:
+    tailscale_services_https_apply_required: >-
+      {{
+        (tailscale_services_host_entry.configured | default('')) != 'ready'
+        or not (tailscale_services_https_active | default(false) | bool)
+        or (tailscale_services_serve_config_drift | default(false) | bool)
+      }}
+  when: tailscale_services_service.protocol == 'https'
+
+- name: Remove legacy Tailscale service HTTP endpoints
+  ansible.windows.win_command:
+    argv:
+      - "{{ tailscale_services_cli_binary }}"
+      - serve
+      - --yes
+      - "--service={{ tailscale_services_api_service_name }}"
+      - "--http={{ item }}"
+      - "off"
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  loop: "{{ tailscale_services_service.legacy_ports | default([]) }}"
+  failed_when: false
+  changed_when: false
+  when: tailscale_services_service.protocol == 'https'
+
+- name: Clear stale Tailscale service host configuration before HTTPS apply
+  ansible.windows.win_command:
+    argv:
+      - "{{ tailscale_services_cli_binary }}"
+      - serve
+      - clear
+      - "{{ tailscale_services_api_service_name }}"
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  failed_when: false
+  changed_when: false
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - tailscale_services_https_apply_required | default(true) | bool
+
+- name: Render Tailscale serve raw configuration (HTTPS with TLS termination)
+  ansible.windows.win_template:
+    src: serve-raw.json.j2
+    dest: "{{ tailscale_services_cli_config_dir }}/{{ tailscale_services_service.name }}-serve-raw.json"
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  register: tailscale_services_serve_raw_rendered
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - tailscale_services_https_apply_required | default(true) | bool
+
+- name: Refresh Tailscale serve-raw fragment file list after render
+  ansible.windows.win_find:
+    paths: "{{ tailscale_services_cli_config_dir }}"
+    patterns: "*-serve-raw.json"
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  register: tailscale_services_serve_raw_fragments
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - tailscale_services_https_apply_required | default(true) | bool
+
+- name: Load Tailscale serve-raw fragment files
+  ansible.windows.slurp:
+    src: "{{ item.path }}"
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  loop: "{{ tailscale_services_serve_raw_fragments.files | default([]) }}"
+  register: tailscale_services_serve_raw_fragment_contents
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - tailscale_services_serve_raw_fragments is not skipped
+
+- name: Reset merged Tailscale serve services accumulator
+  ansible.builtin.set_fact:
+    tailscale_services_merged_services: {}
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - tailscale_services_serve_raw_fragment_contents is not skipped
+
+- name: Merge Tailscale serve configuration from all service fragments
+  ansible.builtin.set_fact:
+    tailscale_services_merged_services: >-
+      {{
+        tailscale_services_merged_services | default({})
+        | combine((item.content | b64decode | from_json).Services | default({}))
+      }}
+  loop: "{{ tailscale_services_serve_raw_fragment_contents.results | default([]) }}"
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - tailscale_services_serve_raw_fragment_contents is not skipped
+
+- name: Build merged Tailscale serve raw document
+  ansible.builtin.set_fact:
+    tailscale_services_merged_serve_raw:
+      Services: "{{ tailscale_services_merged_services | default({}) }}"
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - tailscale_services_serve_raw_fragment_contents is not skipped
+
+- name: Write merged Tailscale serve raw configuration to CLI host
+  ansible.windows.win_copy:
+    content: "{{ tailscale_services_merged_serve_raw | to_json }}"
+    dest: "{{ tailscale_services_cli_config_dir }}/serve-raw-merged.json"
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  register: tailscale_services_serve_raw_merged_written
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - tailscale_services_merged_serve_raw is defined
+
+# set-raw replaces the entire ServeConfig; merge all *-serve-raw.json fragments so
+# deploying one service does not wipe another (e.g. paperless when adding nextcloud).
+- name: Apply merged Tailscale serve raw configuration for HTTPS services
+  ansible.windows.win_shell: |
+    Get-Content -Raw '{{ tailscale_services_cli_config_dir }}\serve-raw-merged.json' |
+      & '{{ tailscale_services_cli_binary }}' serve set-raw
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  register: tailscale_services_cli_serve_raw
+  changed_when: tailscale_services_cli_serve_raw.rc == 0
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - tailscale_services_https_apply_required | default(true) | bool
+    - tailscale_services_merged_serve_raw is defined
+
+# set-raw registers routing with the control plane but does not provision TLS certificates.
+# The serve --https CLI triggers Let's Encrypt cert issuance for web_hostname (required for HTTPS).
+- name: Probe Tailscale Service HTTPS from controller
+  ansible.builtin.command:
+    cmd: >-
+      curl -fsS -o /dev/null -w '%{http_code}'
+      --max-time {{ tailscale_services_https_probe_timeout }}
+      https://{{ tailscale_services_service.web_hostname }}/
+  delegate_to: localhost
+  become: false
+  register: tailscale_services_https_probe
+  changed_when: false
+  failed_when: false
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - tailscale_services_service.web_hostname is defined
+
+- name: Record whether Tailscale Service HTTPS is working
+  ansible.builtin.set_fact:
+    tailscale_services_https_working: >-
+      {{
+        tailscale_services_https_probe.rc == 0
+        and (tailscale_services_https_probe.stdout | default('') | trim)
+        in ['200', '301', '302']
+      }}
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - tailscale_services_https_probe is not skipped
+
+# serve --https can block for minutes on Windows (cert enrollment UI). Do not wait for exit:
+# start detached, brief grace period, then kill if still running; tailscaled keeps config on disk.
+- name: Bootstrap Tailscale HTTPS certificate for service (serve CLI)
+  ansible.windows.win_shell: |
+    $proc = Start-Process `
+      -FilePath '{{ tailscale_services_cli_binary }}' `
+      -ArgumentList @(
+        'serve', '--yes', '--bg',
+        '--service={{ tailscale_services_api_service_name }}',
+        '--https={{ tailscale_services_service.port }}',
+        '{{ tailscale_services_serve_target }}'
+      ) `
+      -PassThru -WindowStyle Hidden
+    Start-Sleep -Seconds {{ tailscale_services_https_cert_grace_seconds }}
+    if (-not $proc.HasExited) {
+      Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    }
+    exit 0
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  register: tailscale_services_cli_serve_https_cert
+  changed_when: true
+  vars:
+    ansible_command_timeout: 60
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - not (tailscale_services_https_working | default(false) | bool)
+
+# Do not stop/restart Tailscale synchronously over WinRM — sc.exe stop blocks until the
+# service exits and can hang this session for minutes. Queue restart in a background job.
+- name: Queue Tailscale service restart (non-blocking)
+  ansible.windows.win_shell: |
+    $null = Start-Job -Name 'Restart-Tailscale' -ScriptBlock {
+      sc.exe stop Tailscale | Out-Null
+      Start-Sleep -Seconds 3
+      sc.exe start Tailscale | Out-Null
+    }
+    exit 0
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  register: tailscale_services_tailscale_restarted
+  changed_when: true
+  vars:
+    ansible_command_timeout: 30
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - not (tailscale_services_https_working | default(false) | bool)
+
+- name: Wait for Tailscale daemon after queued restart
+  ansible.builtin.pause:
+    seconds: "{{ tailscale_services_restart_wait_seconds }}"
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - tailscale_services_tailscale_restarted is not skipped
+    - tailscale_services_tailscale_restarted.changed | default(false)
+
+# Daemon restart can drop in-memory serve state; re-apply merged config from disk.
+- name: Re-apply merged Tailscale serve raw configuration after daemon restart
+  ansible.windows.win_shell: |
+    Get-Content -Raw '{{ tailscale_services_cli_config_dir }}\serve-raw-merged.json' |
+      & '{{ tailscale_services_cli_binary }}' serve set-raw
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  register: tailscale_services_cli_serve_raw_after_restart
+  changed_when: tailscale_services_cli_serve_raw_after_restart.rc == 0
+  when:
+    - tailscale_services_service.protocol == 'https'
+    - tailscale_services_tailscale_restarted is not skipped
+    - tailscale_services_tailscale_restarted.changed | default(false)
+
+# --- HTTP/TCP (non-HTTPS) via v0.0.1 set-config file ---
+- name: Render Tailscale serve configuration for this service
+  ansible.windows.win_template:
+    src: serve-config.json.j2
+    dest: "{{ tailscale_services_cli_config_dir }}/{{ tailscale_services_service.name }}.json"
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  register: tailscale_services_cli_config_rendered
+  when: tailscale_services_service.protocol != 'https'
+
+- name: Read current Tailscale serve configuration for this service
+  ansible.windows.win_command:
+    argv:
+      - "{{ tailscale_services_cli_binary }}"
+      - serve
+      - get-config
+      - "--service={{ tailscale_services_api_service_name }}"
+      - "-"
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  register: tailscale_services_cli_serve_get
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: tailscale_services_service.protocol != 'https'
+
+- name: Load rendered Tailscale serve configuration
+  ansible.windows.slurp:
+    src: "{{ tailscale_services_cli_config_dir }}/{{ tailscale_services_service.name }}.json"
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  register: tailscale_services_cli_serve_desired
+  when: tailscale_services_service.protocol != 'https'
+
+- name: Apply Tailscale serve configuration for this service
+  ansible.windows.win_command:
+    argv:
+      - "{{ tailscale_services_cli_binary }}"
+      - serve
+      - set-config
+      - "--service={{ tailscale_services_api_service_name }}"
+      - "{{ tailscale_services_cli_config_dir }}\\{{ tailscale_services_service.name }}.json"
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  register: tailscale_services_cli_serve_set
+  changed_when: tailscale_services_cli_serve_set.rc == 0
+  when:
+    - tailscale_services_service.protocol != 'https'
+    - >-
+      tailscale_services_cli_config_rendered.changed
+      or (tailscale_services_cli_serve_get.stdout | trim)
+      != (tailscale_services_cli_serve_desired.content | b64decode | trim)
+
+# set-config / set-raw alone do not register the node as a Service host with the control plane.
+- name: Advertise this node as a Tailscale Service host
+  ansible.windows.win_command:
+    argv:
+      - "{{ tailscale_services_cli_binary }}"
+      - serve
+      - advertise
+      - "{{ item }}"
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  loop: >-
+    {{
+      (
+        tailscale_services_merged_services | default({}) | dict2items | map(attribute='key') | list
+      )
+      if (
+        tailscale_services_service.protocol == 'https'
+        and (tailscale_services_merged_services | default({}) | length > 0)
+        and (
+          (tailscale_services_cli_serve_raw.changed | default(false))
+          or (tailscale_services_cli_serve_raw_after_restart.changed | default(false))
+          or (tailscale_services_serve_config_drift | default(false) | bool)
+        )
+      )
+      else [tailscale_services_api_service_name]
+    }}
+  register: tailscale_services_cli_serve_advertise
+  changed_when: >-
+    (
+      tailscale_services_cli_serve_advertise.results
+      | default([tailscale_services_cli_serve_advertise])
+      | selectattr('rc', 'equalto', 0)
+      | list
+      | length
+    ) > 0
+  when: >-
+    (tailscale_services_service.protocol == 'https'
+      and (
+        (tailscale_services_https_apply_required | default(true) | bool)
+        or (tailscale_services_cli_serve_raw.changed | default(false))
+        or (tailscale_services_cli_serve_raw_after_restart.changed | default(false))
+        or (tailscale_services_cli_serve_https_cert.changed | default(false))
+        or not (tailscale_services_https_working | default(false) | bool)
+      ))
+    or (tailscale_services_service.protocol != 'https' and (
+      tailscale_services_cli_config_rendered.changed | default(false)
+      or tailscale_services_cli_serve_set.changed | default(false)
+    ))
+    or tailscale_services_host_entry | length == 0
+    or (tailscale_services_host_entry.configured | default('') != 'ready')

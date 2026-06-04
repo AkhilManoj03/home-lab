@@ -1,0 +1,175 @@
+---
+- name: Build Tailscale API service name
+  ansible.builtin.set_fact:
+    tailscale_services_api_service_name: "svc:{{ tailscale_services_service.name }}"
+
+- name: Debug Tailscale API service name
+  ansible.builtin.debug:
+    msg: "Tailscale API service name: {{ tailscale_services_api_service_name }}"
+
+- name: Get Tailscale VIP service
+  ansible.builtin.uri:
+    url: >-
+      {{ tailscale_services_api_base_url }}/tailnet/{{ tailscale_services_api_tailnet | urlencode }}/vip-services/{{
+      tailscale_services_api_service_name | urlencode }}
+    method: GET
+    headers:
+      Authorization: "Bearer {{ tailscale_services_api_key }}"
+    status_code:
+      - 200
+      - 404
+  register: tailscale_services_api_get
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+
+- name: Debug Tailscale VIP service
+  ansible.builtin.debug:
+    msg: "Tailscale VIP service: {{ tailscale_services_api_get.json }}"
+  when: tailscale_services_api_get.status == 200
+
+- name: Determine if Tailscale VIP service definition changed
+  ansible.builtin.set_fact:
+    tailscale_services_vip_service_changed: >-
+      {{ tailscale_services_api_get.status == 404
+      or (tailscale_services_api_get.json.ports | default([]) | sort)
+      != (['tcp:' ~ (tailscale_services_service.port | string)] | sort) }}
+
+- name: Debug Tailscale VIP service changed
+  ansible.builtin.debug:
+    msg: "Tailscale VIP service changed: {{ tailscale_services_vip_service_changed }}"
+  when: tailscale_services_vip_service_changed | bool
+
+- name: Build Tailscale VIP service update request body
+  ansible.builtin.set_fact:
+    tailscale_services_vip_update_body: >-
+      {{
+        {
+          'name': tailscale_services_api_service_name,
+          'ports': ['tcp:' ~ (tailscale_services_service.port | string)],
+          'comment': tailscale_services_service.comment | default('Managed by Ansible'),
+          'tags': tailscale_services_service.tags
+            | default(tailscale_services_api_get.json.tags | default([])),
+        }
+        | combine(
+          {'addrs': tailscale_services_api_get.json.addrs}
+          if tailscale_services_api_get.status == 200
+          else {}
+        )
+      }}
+  when: tailscale_services_vip_service_changed | bool
+
+- name: Update Tailscale VIP service
+  ansible.builtin.uri:
+    url: >-
+      {{ tailscale_services_api_base_url }}/tailnet/{{ tailscale_services_api_tailnet | urlencode }}/vip-services/{{
+      tailscale_services_api_service_name | urlencode }}
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ tailscale_services_api_key }}"
+      Content-Type: application/json
+    body_format: json
+    body: "{{ tailscale_services_vip_update_body }}"
+    status_code:
+      - 200
+      - 201
+  register: tailscale_services_api_update
+  delegate_to: localhost
+  become: false
+  when: tailscale_services_vip_service_changed | bool
+
+- name: Read Tailscale node status via CLI
+  ansible.windows.win_command:
+    argv:
+      - "{{ tailscale_services_cli_binary }}"
+      - status
+      - --json
+  delegate_to: "{{ tailscale_services_cli_host }}"
+  become: false
+  register: tailscale_services_cli_status
+  changed_when: false
+  check_mode: false
+
+- name: Debug Tailscale node status
+  ansible.builtin.debug:
+    msg: "Tailscale node status: {{ tailscale_services_cli_status.stdout }}"
+  when: tailscale_services_cli_status.rc == 0
+
+- name: Record Tailscale node ID
+  ansible.builtin.set_fact:
+    tailscale_services_node_id: "{{ tailscale_services_cli_status.stdout | from_json | json_query('Self.ID') }}"
+
+- name: Parse Tailscale node self record from CLI status
+  ansible.builtin.set_fact:
+    tailscale_services_cli_self: "{{ tailscale_services_cli_status.stdout | from_json | json_query('Self') }}"
+
+- name: Validate Tailscale CLI host uses tag-based identity
+  ansible.builtin.assert:
+    that:
+      - tailscale_services_cli_self.Tags | default([]) | length > 0
+    quiet: true
+    fail_msg: >-
+      Tailscale Service hosts must be tag-authenticated devices, not user logins.
+      Node "{{ tailscale_services_cli_self.HostName | default('unknown') }}"
+      ({{ tailscale_services_node_id }}) has no tags.
+      On {{ tailscale_services_cli_host }}: add "{{ tailscale_services_required_tags }}" to ACL tagOwners,
+      then re-auth Tailscale (tailscale logout, then tailscale up with a reusable auth key and
+      --advertise-tags={{ tailscale_services_required_tags }}), or tag the device in the admin console.
+      User and tag identities cannot coexist on one device.
+
+- name: Debug Tailscale node ID
+  ansible.builtin.debug:
+    msg: "Tailscale node ID: {{ tailscale_services_node_id }}"
+  when: tailscale_services_node_id is defined
+
+- name: List devices hosting this Tailscale service
+  ansible.builtin.uri:
+    url: >-
+      {{ tailscale_services_api_base_url }}/tailnet/{{ tailscale_services_api_tailnet | urlencode }}/services/{{
+      tailscale_services_api_service_name | urlencode }}/devices
+    method: GET
+    headers:
+      Authorization: "Bearer {{ tailscale_services_api_key }}"
+    status_code:
+      - 200
+  register: tailscale_services_api_hosts
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+  failed_when: false
+
+- name: Debug Tailscale service hosts
+  ansible.builtin.debug:
+    msg: "Tailscale service hosts: {{ tailscale_services_api_hosts.json }}"
+  when: tailscale_services_api_hosts.status == 200
+
+- name: Resolve this host's service registration state
+  ansible.builtin.set_fact:
+    tailscale_services_host_entry: >-
+      {{
+        tailscale_services_api_hosts.json.hosts | default([])
+        | selectattr('nodeId', 'equalto', tailscale_services_node_id)
+        | list
+        | first
+        | default({})
+      }}
+
+- name: Debug Tailscale service host entry
+  ansible.builtin.debug:
+    msg: "Tailscale service host entry: {{ tailscale_services_host_entry }}"
+  when: tailscale_services_host_entry is defined
+
+- name: Determine if service host endpoint configuration is required
+  ansible.builtin.set_fact:
+    tailscale_services_host_config_required: >-
+      {{ (tailscale_services_vip_service_changed | bool)
+      or (tailscale_services_host_entry | length == 0)
+      or (tailscale_services_host_entry.configured | default('') != 'ready')
+      or (tailscale_services_host_entry.configured | default('') is match('partially-configured.*')) }}
+
+- name: Debug Tailscale host config required
+  ansible.builtin.debug:
+    msg: "Tailscale host config required: {{ tailscale_services_host_config_required }}"
+  when: tailscale_services_host_config_required | bool

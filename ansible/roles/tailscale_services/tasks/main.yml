@@ -1,0 +1,43 @@
+---
+- name: Validate Tailscale service definition
+  ansible.builtin.assert:
+    that:
+      - tailscale_services_service is mapping
+      - tailscale_services_service.name is defined
+      - tailscale_services_service.name | length > 0
+      - tailscale_services_service.port is defined
+      - tailscale_services_service.port | int > 0
+      - tailscale_services_service.protocol is defined
+      - tailscale_services_service.protocol in tailscale_services_supported_protocols
+      - (tailscale_services_service.protocol != 'https')
+        or (tailscale_services_service.web_hostname is defined)
+      - (tailscale_services_service.protocol != 'https')
+        or (tailscale_services_service.web_hostname | default('') | length > 0)
+      - (tailscale_services_service.protocol != 'https')
+        or (tailscale_services_service.destination is defined)
+      - tailscale_services_api_tailnet | length > 0
+      - tailscale_services_api_key | length > 0
+    quiet: true
+    fail_msg: >-
+      tailscale_services_service needs name, port, and protocol (http, https, or tcp).
+      For protocol https, also set web_hostname and destination.
+      tailscale_services_api_tailnet and tailscale_services_api_key (TAILSCALE_API_KEY in vault) must be non-empty.
+
+- name: Debug tailscale_services_service
+  ansible.builtin.debug:
+    msg: "tailscale_services_service: {{ tailscale_services_service }}"
+
+- name: Ensure Tailscale VIP service exists (control plane API)
+  ansible.builtin.include_tasks: api_service.yml
+
+- name: Configure service host endpoint via Tailscale CLI on Windows
+  ansible.builtin.include_tasks: host.yml
+  when: >-
+    tailscale_services_host_config_required | bool
+    or tailscale_services_service.protocol == 'https'
+
+- name: Approve Tailscale service host (control plane API)
+  ansible.builtin.include_tasks: api_approval.yml
+
+- name: Verify Tailscale Service host registered in control plane
+  ansible.builtin.include_tasks: api_verify.yml

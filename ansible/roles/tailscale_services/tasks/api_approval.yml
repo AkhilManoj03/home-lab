@@ -1,0 +1,38 @@
+---
+- name: Query service host approval status
+  ansible.builtin.uri:
+    url: >-
+      {{ tailscale_services_api_base_url }}/tailnet/{{ tailscale_services_api_tailnet | urlencode }}/services/{{
+      tailscale_services_api_service_name | urlencode }}/device/{{ tailscale_services_node_id }}/approved
+    method: GET
+    headers:
+      Authorization: "Bearer {{ tailscale_services_api_key }}"
+    status_code:
+      - 200
+      - 404
+  register: tailscale_services_api_approval_get
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+
+- name: Approve Tailscale service host
+  ansible.builtin.uri:
+    url: >-
+      {{ tailscale_services_api_base_url }}/tailnet/{{ tailscale_services_api_tailnet | urlencode }}/services/{{
+      tailscale_services_api_service_name | urlencode }}/device/{{ tailscale_services_node_id }}/approved
+    method: POST
+    headers:
+      Authorization: "Bearer {{ tailscale_services_api_key }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      approved: true
+    status_code:
+      - 200
+  register: tailscale_services_api_approval_post
+  delegate_to: localhost
+  become: false
+  when: >-
+    tailscale_services_api_approval_get.status == 404
+    or not (tailscale_services_api_approval_get.json.approved | default(false))
