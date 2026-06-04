@@ -25,6 +25,9 @@
 .PARAMETER TailscaleAuthKey
     REQUIRED. A reusable, non-ephemeral Tailscale auth key.
 
+    Prefer a pre-authorized key that includes tag:homelab (or your TailscaleAdvertiseTags)
+    so the node can act as a Tailscale Service host.
+
     !! IMPORTANT: Key must be REUSABLE and NON-EPHEMERAL !!
     Ephemeral keys cause the node to vanish from the tailnet when Tailscale
     restarts, which breaks persistent homelab connectivity. Generate a reusable
@@ -70,6 +73,9 @@ param(
     [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
     [string]$TailscaleAuthKey,
+
+    [Parameter()]
+    [string]$TailscaleAdvertiseTags = 'tag:homelab',
 
     [Parameter()]
     [string]$Hostname,
@@ -119,7 +125,8 @@ $AnsiblePublicKey = (Get-Content $AnsiblePublicKeyPath -Raw).Trim()
 # ─── Stage 2: Tailscale ───────────────────────────────────────────────────────
 
 & "$PSScriptRoot\stages\02-tailscale.ps1" `
-    -TailscaleAuthKey $TailscaleAuthKey
+    -TailscaleAuthKey $TailscaleAuthKey `
+    -TailscaleAdvertiseTags $TailscaleAdvertiseTags
 
 # ─── Stage 3: OpenSSH Server, Hardening, and SSH UX ──────────────────────────
 
