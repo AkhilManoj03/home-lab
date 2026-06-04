@@ -1,0 +1,49 @@
+---
+- name: Ensure paperless service directory exists
+  ansible.builtin.file:
+    path: "{{ paperless_service_path }}"
+    state: directory
+    mode: "0755"
+
+- name: Ensure paperless data directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ paperless_data_subdirs }}"
+
+- name: Validate paperless secrets from Ansible Vault
+  ansible.builtin.assert:
+    that:
+      - paperless_secret_key is defined
+      - paperless_secret_key | length > 0
+      - paperless_db_password is defined
+      - paperless_db_password | length > 0
+    quiet: true
+    fail_msg: >-
+      PAPERLESS_SECRET_KEY and PAPERLESS_DB_PASSWORD must be set in ansible/vault.yml.
+
+- name: Render paperless compose file
+  ansible.builtin.template:
+    src: paperless/docker-compose.yml.j2
+    dest: "{{ paperless_service_path }}/docker-compose.yml"
+    mode: "0640"
+  notify: Redeploy paperless stack
+
+- name: Deploy paperless stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ paperless_service_path }}"
+    project_name: "{{ paperless_compose_project_name }}"
+    state: present
+    pull: missing
+
+- name: Publish Paperless via Tailscale Service
+  ansible.builtin.include_role:
+    name: tailscale_services
+    apply:
+      tags:
+        - tailscale_services
+  vars:
+    tailscale_services_service: "{{ paperless_tailscale_service }}"
+  tags:
+    - tailscale_services

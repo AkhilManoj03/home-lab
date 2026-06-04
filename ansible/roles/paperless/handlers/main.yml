@@ -1,0 +1,8 @@
+---
+- name: Redeploy paperless stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ paperless_service_path }}"
+    project_name: "{{ paperless_compose_project_name }}"
+    state: present
+    recreate: auto
+    pull: missing

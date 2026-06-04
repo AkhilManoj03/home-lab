@@ -1,0 +1,9 @@
+---
+- name: Deploy Paperless-ngx stack
+  hosts: lab-ansible
+  become: true
+  gather_facts: true
+  roles:
+    - role: paperless
+      tags:
+        - paperless

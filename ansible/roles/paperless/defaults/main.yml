@@ -1,0 +1,43 @@
+---
+paperless_service_path: "{{ homelab_services_root }}/paperless"
+paperless_data_path: "{{ homelab_data_root }}/paperless"
+paperless_compose_project_name: paperless
+
+paperless_image: ghcr.io/paperless-ngx/paperless-ngx
+paperless_image_tag: "2.15.3"
+paperless_web_container_name: "{{ paperless_web_container }}"
+
+paperless_postgres_image: docker.io/library/postgres
+paperless_postgres_tag: "16"
+paperless_redis_image: docker.io/library/redis
+paperless_redis_tag: "7"
+
+paperless_db_name: paperless
+paperless_db_user: paperless
+
+paperless_data_subdirs:
+  - "{{ paperless_data_path }}/consume"
+  - "{{ paperless_data_path }}/data"
+  - "{{ paperless_data_path }}/export"
+  - "{{ paperless_data_path }}/media"
+  - "{{ paperless_data_path }}/postgres"
+  - "{{ paperless_data_path }}/redis"
+
+# Tailscale Service VIP port (HTTPS terminated by Tailscale; app stays on paperless_web_port).
+paperless_tailscale_port: 443
+
+# Passed to tailscale_services role via include_role after the stack is deployed.
+paperless_tailscale_service:
+  name: paperless
+  port: "{{ paperless_tailscale_port }}"
+  protocol: https
+  web_hostname: "{{ paperless_service_hostname }}"
+  destination: "http://127.0.0.1:{{ paperless_web_port }}"
+  comment: Paperless-ngx
+  # Ports to remove when migrating (e.g. prior tcp:8000 HTTP endpoint).
+  legacy_ports:
+    - "{{ paperless_web_port }}"
+  # Destination is resolved from Windows (lab-devops). With WSL mirrored networking,
+  # 127.0.0.1:<port> on WSL is often reachable as localhost from Windows.
+
+paperless_url: "https://{{ paperless_service_hostname }}"
