@@ -1,10 +1,43 @@
 ---
 ansible_shell_type: sh
 ansible_shell_executable: /bin/bash
-ansible_ssh_transfer_method: scp
 ansible_pipelining: true
 # Windows OpenSSH ForceCommand into WSL: no TTY (avoids conhost noise) and pipelining (no sftp).
+# Use piped file transfer: scp hangs for copy/template modules through this SSH path.
+ansible_ssh_transfer_method: piped
 ansible_ssh_common_args: '-o RequestTTY=no'
 ansible_python_interpreter: /usr/bin/python3
 # Non-interactive sudo: no TTY means sudo cannot prompt; NOPASSWD still needs -n for Ansible become.
 ansible_become_flags: '-n'
+
+# Homelab service layout (WSL is the primary server environment).
+homelab_services_root: /opt/services
+homelab_data_root: /opt/data
+
+# From ansible/vault.yml
+tailscale_tailnet_dns_suffix: "{{ TAILSCALE_TAILNET_DNS_SUFFIX }}"
+tailscale_services_api_key: "{{ TAILSCALE_API_KEY }}"
+paperless_secret_key: "{{ PAPERLESS_SECRET_KEY }}"
+paperless_db_password: "{{ PAPERLESS_DB_PASSWORD }}"
+nextcloud_db_password: "{{ NEXTCLOUD_DB_PASSWORD }}"
+nextcloud_admin_password: "{{ NEXTCLOUD_ADMIN_PASSWORD }}"
+# Use "-" for the API key's default tailnet; override with TAILSCALE_TAILNET if needed.
+tailscale_services_api_tailnet: "{{ TAILSCALE_TAILNET | default('-') }}"
+tailscale_services_required_tags: "{{ TAILSCALE_NODE_TAGS | default('tag:homelab') }}"
+
+# Tailscale CLI runs on the Windows host (same tailnet node as WSL workloads).
+tailscale_services_cli_host: lab-devops
+tailscale_services_cli_binary: 'C:\Program Files\Tailscale\tailscale.exe'
+tailscale_services_cli_config_dir: C:\ProgramData\homelab\tailscale-services
+
+paperless_service_hostname: "paperless.{{ tailscale_tailnet_dns_suffix }}"
+paperless_web_container: paperless-webserver
+paperless_web_port: 8000
+# Tailscale Service VIP port (HTTPS terminated by Tailscale; backend stays on paperless_web_port).
+paperless_tailscale_port: 443
+
+nextcloud_service_hostname: "nextcloud.{{ tailscale_tailnet_dns_suffix }}"
+nextcloud_web_container: nextcloud-app
+nextcloud_web_port: 8080
+# Tailscale Service VIP port (HTTPS terminated by Tailscale; backend stays on nextcloud_web_port).
+nextcloud_tailscale_port: 443
